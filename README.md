@@ -1,7 +1,5 @@
 # Fund_Wise
 
-## Bank of Baroda Hackathon 2024
-
 ### Team Name: Fund_Wise
 
 ### Team Bio:
