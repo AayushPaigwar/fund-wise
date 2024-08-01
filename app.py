@@ -1,13 +1,21 @@
-import os
-from dotenv import load_dotenv
 from flask import Flask, request, jsonify
 import openai
-from langchain_community.llms import AzureOpenAI
-from langchain_community.chat_models import AzureChatOpenAI
+from langchain_openai import AzureOpenAI
+from langchain_core.output_parsers import JsonOutputParser
+from langchain_core.prompts import PromptTemplate
+from langchain_core.pydantic_v1 import BaseModel, Field
+import streamlit as st
+import pandas as pd
+import requests
+import threading
 
-# Load environment variables from .env file
+# environment variables with env
+from dotenv import load_dotenv
+
+import os
+
 load_dotenv()
-
+# Flask app setup
 app = Flask(__name__)
 
 # Azure OpenAI configuration
@@ -25,184 +33,226 @@ llm = AzureOpenAI(
     openai_api_key=OPENAI_API_KEY,
     azure_endpoint=AZURE_ENDPOINT,
     openai_api_type=OPENAI_API_TYPE,
-    deployment_name="gpt-35-turbo",  # Your Azure deployment name
-    temperature=0.7,
+    deployment_name="gpt-35-turbo",
+    temperature=0.2,
 )
 
 
-def get_recommendations(name, age, income, expenses, debt, savings, risk_preference):
-    prompt = f"""
-User: {name}, {age}, Income: {income}, Expenses: {expenses}, Debt: {debt}, Savings: {savings}, Risk: {risk_preference}
-Recommend 3 mutual funds. For each, give:
-1. Fund name
+class MutualFundRecommendation(BaseModel):
+    debt_allocation: str = Field(
+        description="debt allocation of the mutual fund according to the users input in percentage also give the number of amount in INR"
+    )
+    hybrid_allocation: str = Field(
+        description="hybrid allocation of the mutual fund  according to the users input in percentage also give the number of amount in INR"
+    )
+    equity_allocation: str = Field(
+        description="equity allocation of the mutual fund  according to the users input in percentag also give the number of amount in INR"
+    )
+    fund_name: str = Field(description="name of the mutual fund")
+    risk_level: str = Field(description="risk level of the mutual fund")
+    expected_returns: str = Field(description="expected returns of the mutual fund")
+    description: str = Field(description="short description of the mutual fund")
 
-2. Risk level
 
-3. Expected returns
+parser = JsonOutputParser(pydantic_object=MutualFundRecommendation)
+format_response_parser = parser.get_format_instructions()
 
-4. Description
-
-Format:
-1. Fund: ...
-
-   Risk: ...
-   
-   Returns: ...
-   
-   Description: ...
-
-2. Fund: ...
-
-   Risk: ...
-   
-   Returns: ...
-   
-   Description: ...
-
-3. Fund: ...
-
-   Risk: ...
-   
-   Returns: ...
-   
-   Description: ...
+custom_prompt = """
+Answer the Query. \n
+{format_instructions} \n
+Question: {question}
 """
 
-    try:
-        response = llm(prompt)
-        return response
-    except Exception as e:
-        return f"Error: {str(e)}"
+prompt = PromptTemplate(
+    template=custom_prompt,
+    input_variables=["question"],
+    partial_variables={"format_instructions": format_response_parser},
+)
+
+chain = prompt | llm | parser
 
 
-@app.route("/")
-def home():
-    return "Mutual Funds Recommendation System Backend API"
-
-
-@app.route("/recommendations", methods=["POST"])
-def recommendations():
+@app.route("/recommend", methods=["POST"])
+def recommend():
     data = request.json
-    name = data["name"]
-    age = data["age"]
-    income = data["income"]
-    expenses = data["expenses"]
-    debt = data["debt"]
-    savings = data["savings"]
-    risk_preference = data["risk_preference"]
+    user_input = data.get("user_input", "")
+    response = chain.invoke(input=user_input)
+    return jsonify(response)
 
-    recommendations = get_recommendations(
-        name, age, income, expenses, debt, savings, risk_preference
+
+def run_flask():
+    app.run(debug=False, use_reloader=False)
+
+
+# Start Flask app in a separate thread
+thread = threading.Thread(target=run_flask)
+thread.start()
+
+# Streamlit app setup
+st.title("Asset Allocation Report Generator")
+
+age = st.number_input("Enter your age:", min_value=1, max_value=100, value=21)
+annual_salary = st.number_input(
+    "Enter your annual salary (₹):", min_value=0, value=1000000
+)
+monthly_expenses = st.number_input(
+    "Enter your monthly expenses (₹):", min_value=0, value=50000
+)
+monthly_loan = st.number_input(
+    "Enter your monthly loan repayment (₹):", min_value=0, value=10000
+)
+monthly_emergency_fund = st.number_input(
+    "Enter your monthly emergency fund contribution (₹):", min_value=0, value=10000
+)
+
+
+def get_asset_allocation_report(
+    age, annual_salary, monthly_expenses, monthly_loan, monthly_emergency_fund
+):
+    prompt = f"""
+    User Details:
+    Age: {age}
+    Annual Salary: ₹{annual_salary}
+    Monthly Expenses: ₹{monthly_expenses}
+    Monthly Loan Repayment: ₹{monthly_loan}
+    Monthly Emergency Fund Contribution: ₹{monthly_emergency_fund}
+
+    Calculate the monthly salary, monthly savings, determine the risk factor, and provide a recommended asset allocation strategy with the following breakdown:
+    - Equity (High Risk)
+    - Hybrid (Moderate Risk)
+    - Debt (Low Risk)
+
+    Provide the recommended allocation percentages and the exact investment amounts based on the monthly savings. Summarize the risk factor and the investment breakdown.
+    
+    Generate a report in the following template:
+    1. Calculate Disposable Income:
+    Annual Salary: ₹{annual_salary}
+    Monthly Salary: 
+    Monthly Expenses: ₹{monthly_expenses}
+    Monthly Loan Repayment: ₹{monthly_loan}
+    Monthly Emergency Fund Contribution: ₹{monthly_emergency_fund}
+    Monthly Savings: 
+
+    2. Risk Factor Determination:
+    Age: {age}
+    Risk Factor: 
+
+    3. Asset Allocation Strategy:
+    Equity (High Risk): 
+    Hybrid (Moderate Risk): 
+    Debt (Low Risk): 
+
+    4. Recommended Allocation:
+    Given your age and financial position, a higher allocation to equity is advisable.
+
+    5. Investment Calculation:
+    Let's allocate your monthly savings of ₹ into these categories:
+    Equity: ₹
+    Hybrid: ₹
+    Debt: ₹
+
+    6. Summary:
+    Equity: % (₹ per month)
+    Hybrid: % (₹ per month)
+    Debt: % (₹ per month)
+    Risk Factor: 
+    """
+
+    try:
+        response = requests.post(
+            "http://127.0.0.1:5000/recommend", json={"user_input": prompt}
+        )
+        return response.json()
+    except Exception as e:
+        st.error(f"An error occurred while generating the report: {e}")
+        return None
+
+
+def parse_report(raw_output):
+    parsed_output = {}
+    sections = raw_output.split("\n\n")
+
+    for section in sections:
+        lines = section.strip().split("\n")
+        title = lines[0].strip()
+        content = "\n".join(lines[1:]).strip()
+        parsed_output[title] = content
+
+    return parsed_output
+
+
+def extract_allocation_details(parsed_output):
+    allocation = {"Equity": 0, "Hybrid": 0, "Debt": 0}
+    for key, value in parsed_output.items():
+        if key.startswith("Asset Allocation Strategy"):
+            lines = value.split("\n")
+            for line in lines:
+                if "Equity" in line:
+                    allocation["Equity"] = float(
+                        line.split(":")[1].strip().replace("%", "")
+                    )
+                elif "Hybrid" in line:
+                    allocation["Hybrid"] = float(
+                        line.split(":")[1].strip().replace("%", "")
+                    )
+                elif "Debt" in line:
+                    allocation["Debt"] = float(
+                        line.split(":")[1].strip().replace("%", "")
+                    )
+    return allocation
+
+
+def recommend_funds(funds_data, allocation, monthly_savings):
+    recommended_funds = {}
+    for category in allocation:
+        percentage = allocation[category]
+        amount = (percentage / 100) * monthly_savings
+        funds = funds_data[funds_data["Category"] == category].nlargest(
+            3, "Returns"
+        )  # Top 3 funds based on Returns
+        recommended_funds[category] = {"amount": amount, "funds": funds}
+    return recommended_funds
+
+
+def display_recommended_funds(recommended_funds):
+    for category, details in recommended_funds.items():
+        st.subheader(f"{category} Funds")
+        st.write(f'Allocated Amount: ₹{details["amount"]:.2f}')
+        st.table(details["funds"])
+
+
+# Load the mutual fund data
+funds_data = pd.read_csv("./MF_India_AI.csv")
+
+if st.button("Generate Report"):
+    raw_report = get_asset_allocation_report(
+        age=age,
+        annual_salary=annual_salary,
+        monthly_expenses=monthly_expenses,
+        monthly_loan=monthly_loan,
+        monthly_emergency_fund=monthly_emergency_fund,
     )
-    return jsonify({"recommendations": recommendations})
 
+    if raw_report:
+        parsed_report = parse_report(raw_report)
+        st.subheader("Generated Report")
+        for title, content in parsed_report.items():
+            st.subheader(title)
+            st.write(content)
 
-if __name__ == "__main__":
-    app.run(debug=False)
+        # Extracting monthly savings from the parsed report
+        monthly_savings_line = [
+            line
+            for line in parsed_report["1. Calculate Disposable Income:"].split("\n")
+            if "Monthly Savings" in line
+        ][0]
+        monthly_savings = float(
+            monthly_savings_line.split(":")[1].strip().replace("₹", "").replace(",", "")
+        )
 
+        # Extracting allocation details
+        allocation = extract_allocation_details(parsed_report)
 
-# -=============================================================================
-
-# from flask import Flask, request, jsonify
-# import pandas as pd
-# import openai
-# from langchain_community.llms import AzureOpenAI
-
-# app = Flask(__name__)
-
-# # Azure OpenAI configuration
-# OPENAI_API_KEY = "884039b2dd764c80a0297dfd9f57f6e2"
-# OPENAI_API_TYPE = "Azure"
-# AZURE_ENDPOINT = "https://demo-model.openai.azure.com/"
-# OPENAI_API_VERSION = "2024-02-01"
-
-
-# # Initialize OpenAI API
-# openai.api_type = OPENAI_API_TYPE
-# openai.api_version = OPENAI_API_VERSION
-# openai.api_key = OPENAI_API_KEY
-
-
-# # Initialize Azure OpenAI LLM
-# llm = AzureOpenAI(
-#     openai_api_version=OPENAI_API_VERSION,
-#     openai_api_key=OPENAI_API_KEY,
-#     azure_endpoint=AZURE_ENDPOINT,
-#     openai_api_type=OPENAI_API_TYPE,
-#     deployment_name="gpt-35-turbo",
-#     temperature=0.7,  # temperature: 0.1 = more conservative, 0.9 = more creative
-# )
-
-# # Load CSV data into a DataFrame
-# df = pd.read_csv("MF_India_AI.csv")
-
-# # print("Column names in DataFrame:", df.columns)
-# print(df[["amc_name", "risk_level", "returns_1yr", "returns_3yr", "returns_5yr"]])
-
-
-# def get_recommendations(name, age, income, expenses, debt, savings, risk_preference):
-#     # Filter data based on risk preference
-#     risk_level_mapping = {"Low": 1, "Medium": 3, "High": 6}
-#     risk_level = risk_level_mapping.get(risk_preference, 1)
-
-#     filtered_df = df["risk_level"] <= risk_level
-
-#     # Sort by returns (you can customize this based on your preference)
-#     filtered_df["average_returns"] = filtered_df[
-#         ["returns_1yr", "returns_3yr", "returns_5yr"]
-#     ].apply(
-#         lambda x: (
-#             float(x[0].strip("%")) + float(x[1].strip("%")) + float(x[2].strip("%"))
-#         )
-#         / 3,
-#         axis=1,
-#     )
-
-#     filtered_df = filtered_df.sort_values(by="average_returns", ascending=False)
-
-#     # Generate recommendations (taking top 3 for simplicity)
-#     recommendations = filtered_df.head(3)
-
-#     # Prepare response in the desired format
-#     recommendations_list = recommendations[
-#         [
-#             "amc_name",
-#             "risk_level",
-#             "returns_1yr",
-#             "returns_3yr",
-#             "returns_5y",
-#             "category",
-#         ]
-#     ].to_dict(orient="records")
-#     return recommendations_list
-
-
-# # Routes for the Flask API
-
-
-# # home route: /
-# @app.route("/")
-# def home():
-#     return "Mutual Funds Recommendation System Backend API"
-
-
-# # route: /recommendations
-# @app.route("/recommendations", methods=["POST"])
-# def recommendations():
-#     data = request.json
-#     name = data["name"]
-#     age = data["age"]
-#     income = data["income"]
-#     expenses = data["expenses"]
-#     debt = data["debt"]
-#     savings = data["savings"]
-#     risk_preference = data["risk_preference"]
-
-#     recommendations = get_recommendations(
-#         name, age, income, expenses, debt, savings, risk_preference
-#     )
-#     return jsonify({"recommendations": recommendations})
-
-
-# if __name__ == "__main__":
-#     app.run(debug=False)
+        # Recommending funds based on the allocation and savings
+        recommended_funds = recommend_funds(funds_data, allocation, monthly_savings)
+        display_recommended_funds(recommended_funds)

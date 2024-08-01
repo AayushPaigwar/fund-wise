@@ -1,0 +1,6 @@
+streamlit
+streamlit_chat
+openai
+langchain
+faiss-cpu
+azure-core
